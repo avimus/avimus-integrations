@@ -1,0 +1,52 @@
+{
+  "name": "avimus-integrations",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Multi-ERP integration service for Ávimus Patient Journey",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "db:migrate": "tsx src/db/migrate.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "erp",
+    "integration",
+    "avimus",
+    "tasy"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "axios": "^1.18.1",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.9.0",
+    "node-cron": "^4.5.0",
+    "pg": "^8.22.0",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.20.0",
+    "msw": "^2.14.6",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "vitest": {
+    "include": [
+      "tests/**/*.test.ts"
+    ],
+    "environment": "node"
+  }
+}
