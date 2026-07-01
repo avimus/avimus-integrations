@@ -16,6 +16,7 @@ export interface OutboxRecord {
   correlation_id: string;
   erp_name: string;
   tenant_id: string | null;
+  next_retry_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -54,6 +55,7 @@ export async function claimPending(pool: Pool, limit: number): Promise<OutboxRec
   const { rows } = await pool.query<OutboxRecord>(
     `SELECT * FROM outbox
      WHERE status = 'pendente'
+       AND (next_retry_at IS NULL OR next_retry_at <= now())
      ORDER BY created_at ASC
      LIMIT $1`,
     [limit],
@@ -80,8 +82,30 @@ export async function markFailed(
   correlationId: string,
 ): Promise<void> {
   await pool.query(
-    `UPDATE outbox SET status = 'falhou', last_error = $2, correlation_id = $3, updated_at = now() WHERE id = $1`,
+    `UPDATE outbox
+     SET status = 'falhou', attempt_count = attempt_count + 1, next_retry_at = NULL,
+         last_error = $2, correlation_id = $3, updated_at = now()
+     WHERE id = $1`,
     [id, error, correlationId],
+  );
+}
+
+// Falha transitória: mantém o registro 'pendente' mas agenda a próxima
+// tentativa — claimPending só volta a pegá-lo quando next_retry_at chegar
+// (ver ADR-004).
+export async function scheduleRetry(
+  pool: Pool,
+  id: string,
+  error: string,
+  correlationId: string,
+  nextRetryAt: Date,
+): Promise<void> {
+  await pool.query(
+    `UPDATE outbox
+     SET attempt_count = attempt_count + 1, next_retry_at = $4,
+         last_error = $2, correlation_id = $3, updated_at = now()
+     WHERE id = $1`,
+    [id, error, correlationId, nextRetryAt],
   );
 }
 
@@ -100,6 +124,8 @@ export interface OutboxListRecord {
   event_type: string;
   cpf_masked: string;
   attempt_count: number;
+  max_attempts: number;
+  next_retry_at: Date | null;
   last_error: string | null;
   created_at: Date;
 }
@@ -116,6 +142,8 @@ interface OutboxRow {
   event_type: string;
   status: string;
   attempt_count: number;
+  max_attempts: number;
+  next_retry_at: Date | null;
   last_error: string | null;
   created_at: Date;
 }
@@ -166,7 +194,7 @@ export async function listOutbox(pool: Pool, input: ListOutboxInput): Promise<Ou
 
   values.push(limit + 1);
   const { rows } = await pool.query<OutboxRow>(
-    `SELECT id, tenant_id, aggregate_id, event_type, status, attempt_count, last_error, created_at
+    `SELECT id, tenant_id, aggregate_id, event_type, status, attempt_count, max_attempts, next_retry_at, last_error, created_at
      FROM outbox
      WHERE ${conditions.join(' AND ')}
      ORDER BY created_at DESC, id DESC
@@ -193,6 +221,8 @@ export async function listOutbox(pool: Pool, input: ListOutboxInput): Promise<Ou
       event_type: row.event_type,
       cpf_masked: cpfMasked,
       attempt_count: row.attempt_count,
+      max_attempts: row.max_attempts,
+      next_retry_at: row.next_retry_at,
       last_error: row.last_error,
       created_at: row.created_at,
     };
@@ -208,7 +238,7 @@ export async function retryOutboxRecord(
 ): Promise<boolean> {
   const { rowCount } = await pool.query(
     `UPDATE outbox
-     SET status = 'pendente', attempt_count = 0, updated_at = now()
+     SET status = 'pendente', attempt_count = 0, next_retry_at = NULL, updated_at = now()
      WHERE id = $1 AND tenant_id = $2 AND status = 'falhou'`,
     [id, tenantId],
   );

@@ -36,17 +36,34 @@ function getRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-const DEFAULT_SHOULD_RETRY = (err: unknown): boolean => {
-  if (err && typeof err === 'object' && 'status' in err) {
-    const status = (err as { status: number }).status;
-    return [408, 425, 429, 500, 502, 503, 504].includes(status);
+// Transitório = vale retentar (indisponibilidade, timeout, rate limit).
+// Permanente = retentar não resolve (4xx de validação/auth, erro de
+// configuração) — precisa de correção humana. Usado tanto pelo withRetry
+// (retries rápidos intra-run) quanto pelo outbox-worker (retry agendado
+// entre ticks do cron — ver ADR-004).
+export function isTransientError(err: unknown): boolean {
+  const RETRYABLE_STATUSES = [408, 425, 429, 500, 502, 503, 504];
+  if (err && typeof err === 'object') {
+    // AxiosError: status pode vir em err.status ou err.response.status
+    const maybe = err as { status?: unknown; response?: { status?: unknown }; code?: unknown };
+    const status = typeof maybe.status === 'number' ? maybe.status : maybe.response?.status;
+    if (typeof status === 'number') return RETRYABLE_STATUSES.includes(status);
+    // Erros de rede sem resposta HTTP (ECONNABORTED = timeout do axios)
+    if (
+      typeof maybe.code === 'string' &&
+      ['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND'].includes(maybe.code)
+    ) {
+      return true;
+    }
   }
   if (err instanceof TypeError) return true;
   if (err instanceof Error && err.name === 'AbortError') return false;
   if (err instanceof Error && err.message?.includes('ECONNREFUSED')) return true;
   if (err instanceof Error && err.message?.includes('ETIMEDOUT')) return true;
   return false;
-};
+}
+
+const DEFAULT_SHOULD_RETRY = (err: unknown): boolean => isTransientError(err);
 
 export async function withRetry<T>(
   op: (signal: AbortSignal) => Promise<T>,
