@@ -46,6 +46,7 @@ export const ACTION_METADATA: Record<string, AvimusActionMetadata> = {
     requiresEventId: true,
     payloadFields: [
       { name: 'eventDate', required: true, description: 'Data/hora do evento no ERP (usada como data de execução do step)' },
+      { name: 'protocolId', required: false, description: 'Código do protocolo no ERP (ex.: CD_PROTOCOLO no Tasy) — restringe o matching à jornada do protocolo certo quando o paciente tem mais de uma ativa; sem ele, a primeira jornada ativa é usada' },
     ],
   },
   start_journey: {

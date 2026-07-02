@@ -17,12 +17,25 @@ export async function matchPatient(token: string, cpf: string): Promise<avimus.A
   return patient;
 }
 
-export async function matchJourney(token: string, patientId: string): Promise<avimus.AvimusJourney | null> {
-  const journeys = await avimus.listJourneys(token, patientId);
+// protocolId (interno, já resolvido) restringe a busca à jornada do protocolo
+// certo — sem ele, um paciente com duas jornadas ativas em paralelo pegaria a
+// primeira que a API devolvesse, possivelmente do protocolo errado.
+export async function matchJourney(
+  token: string,
+  patientId: string,
+  protocolId?: string,
+): Promise<avimus.AvimusJourney | null> {
+  const journeys = await avimus.listJourneys(token, patientId, protocolId);
   const active = journeys[0] ?? null;
   if (!active) {
-    logger.info({ patientId }, 'No active journey found for patient');
+    logger.info({ patientId, protocolId }, 'No active journey found for patient');
     return null;
+  }
+  if (journeys.length > 1) {
+    logger.warn(
+      { patientId, protocolId, journeyIds: journeys.map((j) => j.id) },
+      'Multiple active journeys matched — using the first; map a protocolId field on the endpoint to disambiguate',
+    );
   }
   return active;
 }
@@ -47,11 +60,12 @@ export async function findMatchingStep(
   token: string,
   cpf: string,
   avimusEventId: string,
+  protocolId?: string,
 ): Promise<MatchResult | null> {
   const patient = await matchPatient(token, cpf);
   if (!patient) return null;
 
-  const journey = await matchJourney(token, patient.id);
+  const journey = await matchJourney(token, patient.id, protocolId);
   if (!journey) return null;
 
   const match = await matchStep(token, journey.id, avimusEventId);

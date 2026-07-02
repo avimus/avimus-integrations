@@ -1,6 +1,7 @@
 import type { RawErpRecord } from '../adapters/types.js';
 import type { TenantErpContext } from './types.js';
 import { findMatchingStep, type MatchResult } from './matcher.js';
+import { resolveProtocol } from '../clients/avimus.js';
 import { logger, safeLog } from '../lib/logger.js';
 import type { CompleteStepPayload } from '../clients/avimus.js';
 
@@ -152,8 +153,31 @@ export async function transformEvent(
     return null;
   }
 
+  // protocolId opcional: se mapeado, resolve o código bruto do ERP (ex.:
+  // CD_PROTOCOLO="283") no protocolo interno — mesmo de-para do start_journey
+  // (ProtocolExternalCode) — para restringir o matching à jornada do
+  // protocolo certo quando o paciente tem mais de uma ativa.
+  let resolvedProtocolId: string | undefined;
+  const rawProtocolCode = mappedFields['protocolId'] != null ? String(mappedFields['protocolId']).trim() : '';
+  if (rawProtocolCode) {
+    const protocol = await resolveProtocol(context.avimusApiToken, context.connection.erp_name, rawProtocolCode);
+    if (!protocol) {
+      logger.warn(
+        { tenantId, endpointId, eventId: rawRecord.eventId, rawProtocolCode },
+        'No protocol found for external code — cadastre o código externo no protocolo (skipping record)',
+      );
+      return null;
+    }
+    resolvedProtocolId = protocol.id;
+  }
+
   // Find matching step via Ávimus API
-  const match = await findMatchingStep(context.avimusApiToken, cpf, eventMapping.avimus_event_id);
+  const match = await findMatchingStep(
+    context.avimusApiToken,
+    cpf,
+    eventMapping.avimus_event_id,
+    resolvedProtocolId,
+  );
   if (!match) {
     logger.info(
       safeLog({ tenantId, endpointId, eventId: rawRecord.eventId, cpf, avimusEventId: eventMapping.avimus_event_id }),
@@ -163,9 +187,11 @@ export async function transformEvent(
   }
 
   // Build complete_step outbox payload
+  // protocolId excluído: o código bruto do ERP sobrescreveria (via spread) o
+  // protocolId interno já colocado no metadata abaixo.
   const extraMetadata: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(mappedFields)) {
-    if (key !== 'cpf' && key !== 'erpEventCode' && key !== 'eventDate') {
+    if (key !== 'cpf' && key !== 'erpEventCode' && key !== 'eventDate' && key !== 'protocolId') {
       extraMetadata[key] = value;
     }
   }

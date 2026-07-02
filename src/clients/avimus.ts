@@ -131,11 +131,15 @@ export async function resolveProtocol(
   }
 }
 
-export async function listJourneys(token: string, patientId: string): Promise<AvimusJourney[]> {
+export async function listJourneys(
+  token: string,
+  patientId: string,
+  protocolId?: string,
+): Promise<AvimusJourney[]> {
   const client = getAvimusClient(token);
   try {
     const { data } = await client.get<{ data: AvimusJourney[] }>('/api/v1/journeys', {
-      params: { patientId, status: 'ativo' },
+      params: { patientId, status: 'ativo', ...(protocolId ? { protocolId } : {}) },
     });
     return data.data;
   } catch (err) {
