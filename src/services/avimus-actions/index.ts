@@ -49,6 +49,7 @@ export const ACTION_METADATA: Record<string, AvimusActionMetadata> = {
       { name: 'protocolId', required: false, description: 'Código do protocolo no ERP (ex.: CD_PROTOCOLO no Tasy) — restringe o matching à jornada do protocolo certo quando o paciente tem mais de uma ativa; sem ele, a primeira jornada ativa é usada' },
       { name: 'professionalName', required: false, description: 'Nome do profissional que realizou o atendimento no ERP — entra na observação da etapa e nos dados da integração' },
       { name: 'result', required: false, description: 'Resultado da etapa — obrigatório para concluir etapas de decisão com ramificação (o valor precisa ser uma das opções configuradas no protocolo)' },
+      { name: 'notes', required: false, description: 'Observação vinda do ERP — anexada à observação da etapa, junto com o texto automático (evento, data, profissional)' },
     ],
   },
   start_journey: {

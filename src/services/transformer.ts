@@ -192,7 +192,7 @@ export async function transformEvent(
   // própria; cpf/erpEventCode/eventDate já têm destino dedicado.
   const extraMetadata: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(mappedFields)) {
-    if (!['cpf', 'erpEventCode', 'eventDate', 'protocolId', 'result'].includes(key)) {
+    if (!['cpf', 'erpEventCode', 'eventDate', 'protocolId', 'result', 'notes'].includes(key)) {
       extraMetadata[key] = value;
     }
   }
@@ -201,11 +201,15 @@ export async function transformEvent(
   // drawer — inclui o profissional do ERP quando mapeado.
   const professionalName =
     typeof mappedFields['professionalName'] === 'string' ? mappedFields['professionalName'].trim() : '';
+  const erpNotes = mappedFields['notes'] != null ? String(mappedFields['notes']).trim() : '';
   const eventDateBr = eventDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  // Limite do CompleteStepSchema na API (max 2000) — trunca a observação do
+  // ERP se necessário em vez de falhar a entrega com 400.
   const notes = [
     `Concluído via integração ${context.connection.erp_name} — evento ${erpEventCode} em ${eventDateBr}`,
     ...(professionalName ? [`Profissional: ${professionalName}`] : []),
-  ].join('. ');
+    ...(erpNotes ? [`Obs.: ${erpNotes}`] : []),
+  ].join('. ').slice(0, 2000);
 
   // result só quando mapeado: 'completed' fixo não casava com as opções de
   // ramificação de etapas de decisão (422 UNMATCHED_BRANCH_RESULT) e sujava
