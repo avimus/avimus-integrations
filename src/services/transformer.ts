@@ -188,21 +188,37 @@ export async function transformEvent(
 
   // Build complete_step outbox payload
   // protocolId excluído: o código bruto do ERP sobrescreveria (via spread) o
-  // protocolId interno já colocado no metadata abaixo.
+  // protocolId interno já colocado no metadata abaixo. result vira coluna
+  // própria; cpf/erpEventCode/eventDate já têm destino dedicado.
   const extraMetadata: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(mappedFields)) {
-    if (key !== 'cpf' && key !== 'erpEventCode' && key !== 'eventDate' && key !== 'protocolId') {
+    if (!['cpf', 'erpEventCode', 'eventDate', 'protocolId', 'result'].includes(key)) {
       extraMetadata[key] = value;
     }
   }
 
+  // Observação legível, no mesmo espírito do que um humano digitaria no
+  // drawer — inclui o profissional do ERP quando mapeado.
+  const professionalName =
+    typeof mappedFields['professionalName'] === 'string' ? mappedFields['professionalName'].trim() : '';
+  const eventDateBr = eventDate.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const notes = [
+    `Concluído via integração ${context.connection.erp_name} — evento ${erpEventCode} em ${eventDateBr}`,
+    ...(professionalName ? [`Profissional: ${professionalName}`] : []),
+  ].join('. ');
+
+  // result só quando mapeado: 'completed' fixo não casava com as opções de
+  // ramificação de etapas de decisão (422 UNMATCHED_BRANCH_RESULT) e sujava
+  // a UI das etapas normais.
+  const mappedResult = mappedFields['result'] != null ? String(mappedFields['result']).trim() : '';
+
   const payload: CompleteStepPayload = {
-    result: 'completed',
-    notes: 'Sincronizado automaticamente via integração ERP',
+    ...(mappedResult ? { result: mappedResult } : {}),
+    notes,
+    executedAt: eventDate.toISOString(),
     metadata: {
       erpName: context.connection.erp_name,
       protocolId: match.protocol,
-      eventDate: eventDate.toISOString(),
       ...extraMetadata,
     },
   };

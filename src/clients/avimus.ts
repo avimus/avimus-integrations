@@ -51,12 +51,18 @@ export interface AvimusProtocol {
 }
 
 export interface CompleteStepPayload {
-  result: string;
+  // Só enviado se o endpoint mapear um campo `result` (necessário para
+  // etapas de decisão com ramificação — 'completed' fixo não casava com
+  // nenhuma opção válida e falhava com 422).
+  result?: string;
   notes: string;
+  // Data clínica real do evento no ERP — a API grava como executedAt do
+  // step em vez do horário da entrega (que pode divergir horas por causa
+  // do polling + retries).
+  executedAt: string;
   metadata: {
     erpName: string;
     protocolId: string;
-    eventDate: string;
     [key: string]: unknown; // additional mapped fields from field_mappings
   };
 }

@@ -24,8 +24,9 @@ export async function completeStepAction(
   const config = getConfig();
   const payload = record.payload as {
     stepId: string;
-    result: string;
+    result?: string;
     notes: string;
+    executedAt: string;
     metadata: Record<string, unknown>;
   };
 
@@ -66,9 +67,10 @@ export async function completeStepAction(
     async (retrySignal) => {
       attempt++;
       await completeStep(token, payload.stepId, {
-        result: payload.result,
+        ...(payload.result ? { result: payload.result } : {}),
         notes: payload.notes,
-        metadata: payload.metadata as { erpName: string; protocolId: string; eventDate: string },
+        executedAt: payload.executedAt,
+        metadata: payload.metadata as { erpName: string; protocolId: string },
       }, retrySignal);
     },
     {
