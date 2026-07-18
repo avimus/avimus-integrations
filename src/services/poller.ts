@@ -15,7 +15,7 @@ async function processEvent(
   rawRecord: RawErpRecord,
   context: TenantErpContext,
 ): Promise<{ enqueued: boolean }> {
-  const result = await transformEvent(rawRecord, context);
+  const result = await transformEvent(rawRecord, context, pool);
   if (!result) return { enqueued: false };
 
   const { tenant, connection, endpoint } = context;

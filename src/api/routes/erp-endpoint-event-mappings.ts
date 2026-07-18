@@ -5,7 +5,9 @@ import { getTenantById } from '../../db/queries/tenants.js';
 import { getEndpointById } from '../../db/queries/erp-endpoints.js';
 import { getEventMappings, replaceEventMappings } from '../../db/queries/event-mappings.js';
 import type { EventMappingInput } from '../../db/queries/event-mappings.js';
+import { getFieldMappings } from '../../db/queries/field-mappings.js';
 import { ACTION_METADATA } from '../../services/avimus-actions/index.js';
+import { assertCompleteStepFieldsPresent, MissingCompleteStepFieldsError } from '../../services/mapping-validation.js';
 
 // Derivado de ACTION_METADATA (não hardcoded) — adicionar uma ação nova só
 // nesse registro já é suficiente pra ela ser aceita aqui também.
@@ -71,9 +73,16 @@ export async function erpEndpointEventMappingRoutes(
     }
 
     try {
+      const currentFieldMappings = await getFieldMappings(pool, tenantId, endpointId);
+      assertCompleteStepFieldsPresent(currentFieldMappings, inputs);
+
       const mappings = await replaceEventMappings(pool, tenantId, endpointId, inputs);
       await reply.send({ endpoint_id: endpointId, mappings });
     } catch (err) {
+      if (err instanceof MissingCompleteStepFieldsError) {
+        await reply.code(422).send({ error: err.message, missingFields: err.missingFields });
+        return;
+      }
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 404) { await reply.code(404).send({ error: 'Endpoint not found' }); return; }
       throw err;

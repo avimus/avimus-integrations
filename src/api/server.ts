@@ -11,6 +11,7 @@ import { erpEndpointFieldMappingRoutes } from './routes/erp-endpoint-field-mappi
 import { erpEndpointEventMappingRoutes } from './routes/erp-endpoint-event-mappings.js';
 import { syncStatusRoutes } from './routes/sync-status.js';
 import { outboxRoutes } from './routes/outbox.js';
+import { droppedEventsRoutes } from './routes/dropped-events.js';
 import { avimusActionRoutes } from './routes/avimus-actions.js';
 import { logRoutes } from './routes/logs.js';
 import { logger } from '../lib/logger.js';
@@ -40,6 +41,7 @@ export async function buildApiServer(pool: Pool, config: Config): Promise<Fastif
   await fastify.register(erpEndpointEventMappingRoutes, { pool, config });
   await fastify.register(syncStatusRoutes, { pool, config });
   await fastify.register(outboxRoutes, { pool, config });
+  await fastify.register(droppedEventsRoutes, { pool, config });
   await fastify.register(avimusActionRoutes);
   await fastify.register(logRoutes);
 

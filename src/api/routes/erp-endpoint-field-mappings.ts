@@ -5,6 +5,8 @@ import { getTenantById } from '../../db/queries/tenants.js';
 import { getEndpointById } from '../../db/queries/erp-endpoints.js';
 import { getFieldMappings, replaceFieldMappings } from '../../db/queries/field-mappings.js';
 import type { FieldMappingInput } from '../../db/queries/field-mappings.js';
+import { getEventMappings } from '../../db/queries/event-mappings.js';
+import { assertCompleteStepFieldsPresent, MissingCompleteStepFieldsError } from '../../services/mapping-validation.js';
 
 export async function erpEndpointFieldMappingRoutes(
   fastify: FastifyInstance,
@@ -56,9 +58,16 @@ export async function erpEndpointFieldMappingRoutes(
     }
 
     try {
+      const currentEventMappings = await getEventMappings(pool, tenantId, endpointId);
+      assertCompleteStepFieldsPresent(inputs, currentEventMappings);
+
       const mappings = await replaceFieldMappings(pool, tenantId, endpointId, inputs);
       await reply.send({ endpoint_id: endpointId, mappings });
     } catch (err) {
+      if (err instanceof MissingCompleteStepFieldsError) {
+        await reply.code(422).send({ error: err.message, missingFields: err.missingFields });
+        return;
+      }
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 404) { await reply.code(404).send({ error: 'Endpoint not found' }); return; }
       throw err;

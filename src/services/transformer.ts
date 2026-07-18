@@ -1,9 +1,11 @@
+import type { Pool } from 'pg';
 import type { RawErpRecord } from '../adapters/types.js';
 import type { TenantErpContext } from './types.js';
-import { findMatchingStep, type MatchResult } from './matcher.js';
+import { matchPatient, matchJourney, matchStep, type MatchResult } from './matcher.js';
 import { resolveProtocol } from '../clients/avimus.js';
-import { logger, safeLog } from '../lib/logger.js';
+import { logger, safeLog, maskCpf } from '../lib/logger.js';
 import type { CompleteStepPayload } from '../clients/avimus.js';
+import { insertDroppedEvent, type DropReason } from '../db/queries/dropped-events.js';
 
 export interface CompleteStepTransformResult {
   action: 'complete_step';
@@ -52,9 +54,27 @@ function extractMappedFields(
 export async function transformEvent(
   rawRecord: RawErpRecord,
   context: TenantErpContext,
+  pool: Pool,
 ): Promise<TransformResult | null> {
   const tenantId = context.tenant.id;
   const endpointId = context.endpoint.id;
+
+  // Descartes anteriores a este trabalho desapareciam sem deixar rastro —
+  // nunca viravam linha de outbox, então nunca apareciam na tela de Falhas
+  // do admin. Cada `return null` abaixo agora registra o motivo primeiro.
+  function drop(
+    dropReason: DropReason,
+    extra?: { erpEventCode?: string; cpf?: string; protocolId?: string },
+  ): Promise<null> {
+    return insertDroppedEvent(pool, {
+      tenantId,
+      endpointId,
+      erpEventCode: extra?.erpEventCode,
+      dropReason,
+      cpfMasked: extra?.cpf ? maskCpf(extra.cpf) : null,
+      protocolId: extra?.protocolId,
+    }).then(() => null);
+  }
 
   // Step 1: Extract all configured field mappings from the raw ERP payload
   const mappedFields = extractMappedFields(rawRecord.rawPayload, context);
@@ -67,7 +87,7 @@ export async function transformEvent(
       safeLog({ tenantId, endpointId, eventId: rawRecord.eventId, cpf: mappedFields['cpf'] }),
       'Missing or empty cpf field — skipping record',
     );
-    return null;
+    return drop('missing_field');
   }
 
   // Step 3: Validate erpEventCode (needed to find event_mapping)
@@ -77,7 +97,7 @@ export async function transformEvent(
       { tenantId, endpointId, eventId: rawRecord.eventId },
       'Missing erpEventCode field — skipping record',
     );
-    return null;
+    return drop('missing_field', { cpf });
   }
 
   // Step 4: Resolve ERP event code → event_mapping (contains avimus_action)
@@ -87,7 +107,7 @@ export async function transformEvent(
       { tenantId, endpointId, erpEventCode },
       'No event_mapping found for ERP event code — skipping record',
     );
-    return null;
+    return drop('no_event_mapping', { erpEventCode, cpf });
   }
 
   // Step 5: Branch by avimus_action
@@ -99,7 +119,7 @@ export async function transformEvent(
         { tenantId, endpointId, eventId: rawRecord.eventId },
         'Missing protocolId field for start_journey action — skipping record',
       );
-      return null;
+      return drop('missing_field', { erpEventCode, cpf });
     }
     const patientName = typeof mappedFields['patientName'] === 'string' ? mappedFields['patientName'] : undefined;
     const patientBirthDate = typeof mappedFields['patientBirthDate'] === 'string' ? mappedFields['patientBirthDate'] : undefined;
@@ -126,7 +146,7 @@ export async function transformEvent(
       { tenantId, endpointId, eventId: rawRecord.eventId },
       'Missing eventDate field — skipping record',
     );
-    return null;
+    return drop('missing_field', { erpEventCode, cpf });
   }
   const eventDate = new Date(String(eventDateRaw));
   if (isNaN(eventDate.getTime())) {
@@ -134,7 +154,7 @@ export async function transformEvent(
       { tenantId, endpointId, eventId: rawRecord.eventId, eventDateRaw },
       'Invalid eventDate value — skipping record',
     );
-    return null;
+    return drop('missing_field', { erpEventCode, cpf });
   }
 
   if (!eventMapping.avimus_event_id) {
@@ -142,7 +162,7 @@ export async function transformEvent(
       { tenantId, endpointId, erpEventCode },
       'complete_step event_mapping missing avimus_event_id — skipping record',
     );
-    return null;
+    return drop('no_event_mapping', { erpEventCode, cpf });
   }
 
   if (!context.avimusApiToken) {
@@ -150,7 +170,7 @@ export async function transformEvent(
       { tenantId, endpointId },
       'Tenant has no avimus_api_token configured — skipping record',
     );
-    return null;
+    return drop('missing_field', { erpEventCode, cpf });
   }
 
   // protocolId opcional: se mapeado, resolve o código bruto do ERP (ex.:
@@ -166,25 +186,47 @@ export async function transformEvent(
         { tenantId, endpointId, eventId: rawRecord.eventId, rawProtocolCode },
         'No protocol found for external code — cadastre o código externo no protocolo (skipping record)',
       );
-      return null;
+      return drop('no_active_journey', { erpEventCode, cpf, protocolId: rawProtocolCode });
     }
     resolvedProtocolId = protocol.id;
   }
 
-  // Find matching step via Ávimus API
-  const match = await findMatchingStep(
-    context.avimusApiToken,
-    cpf,
-    eventMapping.avimus_event_id,
-    resolvedProtocolId,
-  );
-  if (!match) {
+  // Find matching patient → journey → step (inline em vez de
+  // findMatchingStep() pra poder registrar QUAL das três falhou, não só "sem
+  // match" genérico — ver dropped-events.ts).
+  const patient = await matchPatient(context.avimusApiToken, cpf);
+  if (!patient) {
+    logger.info(
+      safeLog({ tenantId, endpointId, eventId: rawRecord.eventId, cpf }),
+      'No patient found for CPF — skipping record',
+    );
+    return drop('no_active_journey', { erpEventCode, cpf, protocolId: resolvedProtocolId });
+  }
+
+  const journey = await matchJourney(context.avimusApiToken, patient.id, resolvedProtocolId);
+  if (!journey) {
+    logger.info(
+      safeLog({ tenantId, endpointId, eventId: rawRecord.eventId, cpf, patientId: patient.id }),
+      'No active journey found for patient — skipping record',
+    );
+    return drop('no_active_journey', { erpEventCode, cpf, protocolId: resolvedProtocolId });
+  }
+
+  const stepMatch = await matchStep(context.avimusApiToken, journey.id, eventMapping.avimus_event_id);
+  if (!stepMatch) {
     logger.info(
       safeLog({ tenantId, endpointId, eventId: rawRecord.eventId, cpf, avimusEventId: eventMapping.avimus_event_id }),
-      'No Ávimus match found — skipping record',
+      'No matching step found for event — skipping record',
     );
-    return null;
+    return drop('no_matching_step', { erpEventCode, cpf, protocolId: resolvedProtocolId });
   }
+
+  const match: MatchResult = {
+    patientId: patient.id,
+    journeyId: journey.id,
+    stepId: stepMatch.step.id,
+    protocol: stepMatch.protocolId,
+  };
 
   // Build complete_step outbox payload
   // protocolId excluído: o código bruto do ERP sobrescreveria (via spread) o
